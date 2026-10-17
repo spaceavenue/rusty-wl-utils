@@ -143,10 +143,8 @@ fn run_dump_bgra(
   fill: bool,
   path: StringOnStack<256>,
 ) -> Result<(), AppError> {
-  let mut w_str = StringOnStack::<10>::new();
-  w_str.push(out_width);
-  let mut h_str = StringOnStack::<10>::new();
-  h_str.push(out_height);
+  let mut dim_str = StringOnStack::<21>::new();
+  dim_str.push(out_width).push("x").push(out_height);
   let mut mode_str = StringOnStack::<5>::new();
   if fill {
     mode_str.push("fill");
@@ -155,10 +153,9 @@ fn run_dump_bgra(
   }
 
   // build dump-bgra argument vector: scale image to raw bgra pixels and stream to stdout
-  let argv: [*const libc::c_char; 7] = [
+  let argv: [*const libc::c_char; 6] = [
     c"dump-bgra".as_ptr(),
-    w_str.as_ptr(),
-    h_str.as_ptr(),
+    dim_str.as_ptr(),
     mode_str.as_ptr(),
     path.as_ptr(),
     c"-".as_ptr(),
