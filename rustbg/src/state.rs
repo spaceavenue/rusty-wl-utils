@@ -113,8 +113,7 @@ impl State {
     let mut pool_msg = Message::new(shm_id, wl_shm::request::CREATE_POOL);
     pool_msg.write_u32(pool_id);
     pool_msg.write_i32((width * height * 4) as i32);
-    conn.send_logged(&pool_msg, Some(fd));
-    unsafe { libc::close(fd) };
+    conn.send_logged(&pool_msg, Some(&fd));
 
     // create a wl_buffer from the pool
     let mut buf_msg = Message::new(pool_id, wl_shm_pool::request::CREATE_BUFFER);

@@ -6,6 +6,7 @@ pub mod image_load;
 pub mod shm;
 pub mod state;
 
+use rustix::fs::{Access, access};
 use wllib::cli;
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
@@ -88,7 +89,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
     write_usage()
   }
 
-  if unsafe { libc::access(config.image_path.as_ptr(), libc::F_OK) != 0 } {
+  if access(config.image_path.as_c_str(), Access::EXISTS).is_err() {
     write_stderr("[rustbg] cannot open image file.\n");
     write_usage()
   }

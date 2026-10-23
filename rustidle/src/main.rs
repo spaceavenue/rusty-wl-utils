@@ -5,6 +5,7 @@ pub mod config;
 pub mod error;
 pub mod state;
 
+use rustix::fs::{Access, access};
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
 use wllib::io::write_stderr;
@@ -41,7 +42,8 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
   if config_path.is_null() {
     write_usage()
   }
-  if unsafe { libc::access(config_path, libc::F_OK) != 0 } {
+  let config_path = unsafe { core::ffi::CStr::from_ptr(config_path) };
+  if access(config_path, Access::EXISTS).is_err() {
     write_stderr("[rustidle] failed to open config file.\n");
     return 1;
   }

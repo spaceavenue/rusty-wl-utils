@@ -63,7 +63,7 @@ fn parse_f64(s: *const libc::c_char) -> Option<f64> {
   }
   let mut end_ptr = core::ptr::null_mut();
   let val = unsafe { libc::strtod(s, &raw mut end_ptr) };
-  if end_ptr == s as *mut libc::c_char {
+  if core::ptr::eq(end_ptr, s) {
     None
   } else {
     Some(val)
@@ -89,7 +89,7 @@ fn parse_u32(s: *const libc::c_char) -> Option<u32> {
   }
   let mut end_ptr = core::ptr::null_mut();
   let val = unsafe { libc::strtoul(s, &raw mut end_ptr, 10) };
-  if end_ptr == s as *mut libc::c_char {
+  if core::ptr::eq(end_ptr, s) {
     None
   } else {
     u32::try_from(val).ok()

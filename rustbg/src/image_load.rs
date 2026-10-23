@@ -1,4 +1,8 @@
-use wllib::error::SysError;
+use rustix::fd::{FromRawFd, OwnedFd};
+use rustix::fs::{Mode, OFlags, open};
+use rustix::io::{dup2, read};
+use rustix::pipe::{PipeFlags, pipe_with};
+use wllib::error::{SysError, SysResultExt};
 use wllib::fmt_lite::StringOnStack;
 
 use crate::error::AppError;
@@ -14,72 +18,59 @@ fn exec_and_read<const N: usize>(
   argv: [*const libc::c_char; N],
   buffer: &mut [u8],
 ) -> Result<(), AppError> {
-  unsafe {
-    let mut pipe = [0i32; 2];
-    // create an unidirectional pipe to read data from child process
-    // O_CLOEXEC closes the read/write ends in any other spawned children
-    if libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) != 0 {
-      return Err(AppError::Sys(SysError::last("pipe2")));
+  // create an unidirectional pipe to read data from child process
+  // O_CLOEXEC closes the read/write ends in any other spawned children
+  let (read_fd, write_fd) = pipe_with(PipeFlags::CLOEXEC).syserr("pipe")?;
+
+  let pid = unsafe { libc::fork() };
+  if pid < 0 {
+    return Err(AppError::Sys(SysError::last("fork")));
+  }
+  // child process context
+  // 1. redirect stdout to the write end of the pipe
+  // 2. restore default SIGPIPE handler before exec
+  if pid == 0 {
+    drop(read_fd);
+
+    let mut stdout = unsafe { OwnedFd::from_raw_fd(1) };
+    let _ = dup2(&write_fd, &mut stdout);
+    core::mem::forget(stdout);
+    drop(write_fd);
+
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+
+    // redirect stderr to /dev/null
+    if let Ok(devnull) = open(c"/dev/null", OFlags::WRONLY, Mode::empty()) {
+      let mut stderr = unsafe { OwnedFd::from_raw_fd(2) };
+      let _ = dup2(&devnull, &mut stderr);
+      core::mem::forget(stderr);
+      drop(devnull);
     }
 
-    let pid = libc::fork();
-    if pid < 0 {
-      let err = SysError::last("fork");
-      libc::close(pipe[0]);
-      libc::close(pipe[1]);
-      return Err(AppError::Sys(err));
-    }
-    // child process context
-    // 1. redirect stdout to the write end of the pipe
-    // 2. restore default SIGPIPE handler before exec
-    if pid == 0 {
-      libc::close(pipe[0]);
-      libc::dup2(pipe[1], 1);
-      libc::close(pipe[1]);
-      libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    unsafe { libc::execvp(argv[0], argv.as_ptr()) };
+    // if execvp failed, kill child >:)
+    unsafe { libc::_exit(1) };
+  }
 
-      // redirect stderr to /dev/null
-      let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-      if devnull >= 0 {
-        libc::dup2(devnull, 2);
-        libc::close(devnull);
-      }
-      libc::execvp(argv[0], argv.as_ptr());
-      // if execvp failed, kill child >:)
-      libc::_exit(1);
-    }
+  // parent process context
+  // 1. close the write end in parent
+  // 2. read raw bytes from the pipe directly into buffer
+  drop(write_fd);
 
-    // parent process context
-    // 1. close the write end in parent
-    // 2. read raw bytes from the pipe directly into buffer
-    libc::close(pipe[1]);
-    let mut offset = 0usize;
-    loop {
-      let remaining = buffer.len() - offset;
-      if remaining == 0 {
-        break;
-      }
-      let num_bytes = libc::read(pipe[0], buffer.as_mut_ptr().add(offset).cast(), remaining);
-      match num_bytes {
-        num_bytes if num_bytes > 0 => {
-          offset += num_bytes as usize;
-        }
-        0 => break, // EOF reached
-        _ => {
-          let err = SysError::last("read");
-          libc::close(pipe[0]);
-          libc::waitpid(pid, core::ptr::null_mut(), 0);
-          return Err(AppError::Sys(err));
-        }
-      }
+  let mut offset = 0usize;
+  while offset < buffer.len() {
+    let remaining = read(&read_fd, &mut buffer[offset..]).syserr("read")?;
+    if remaining == 0 {
+      break;
     }
-    libc::close(pipe[0]);
-    libc::waitpid(pid, core::ptr::null_mut(), 0);
+    offset += remaining;
+  }
 
-    if offset != buffer.len() {
-      // failed to read complete frame size
-      return Err(AppError::ImageDecodeError);
-    }
+  drop(read_fd);
+  unsafe { libc::waitpid(pid, core::ptr::null_mut(), 0) };
+
+  if offset != buffer.len() {
+    return Err(AppError::ImageDecodeError);
   }
   Ok(())
 }

@@ -68,10 +68,6 @@ pub struct Geometry {
   pub transform: u32,
 }
 
-// wl_output's physical geometry can differ from the output's actual position/size in the
-// compositor's layout once scaling/rotation/fractional-scale are involved (see
-// xdg-output-unstable-v1.xml's `logical_size` docs). `logical_*` here is that compositor-space
-// geometry.  zero/unset when `xdg_output_id` is 0.
 #[derive(Default)]
 pub struct Logical {
   pub x: i32,
@@ -103,9 +99,7 @@ pub struct Output {
 }
 impl Output {
   // an output is ready to print once wl_output has finished reporting, and once zxdg_output_v1 has
-  // finished reporting, if one was actually requested for it. a compositor with no
-  // zxdg_output_manager_v1 global never gets `xdg_output_id` set, so those outputs are ready as
-  // soon as wl_output alone is done.
+  // finished reporting, if one was actually requested for it.
   fn is_complete(&self) -> bool {
     self.wl_done && (self.xdg_output_id == 0 || self.logical_done)
   }
@@ -130,10 +124,7 @@ impl State {
   }
 
   // send `get_xdg_output(new_id, wl_output_id)` for every bound output, once the manager global
-  // (if any) is known. called once after `crawl()` returns. `zxdg_output_manager_v1` and
-  // `wl_output` globals can arrive from the registry in either order, so there's no point trying
-  // to request this reactively from inside `on_global`. by the time crawl finishes, every
-  // `wl_output` has been bound and the manager global (if any) has definitely been seen.
+  // (if any) is known. called once after `crawl()` returns.
   pub fn request_xdg_outputs(&mut self, conn: &mut Connection) {
     if self.global.xdg_output_manager_id == 0 {
       return;

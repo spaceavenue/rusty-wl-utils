@@ -17,7 +17,11 @@
 //
 // command tokens are stored as *offsets* into the raw file buffer, not raw pointers.
 
-use wllib::error::SysError;
+use core::ffi::CStr;
+
+use rustix::fs::{Mode, OFlags, open};
+use rustix::io::read;
+use wllib::error::{SysError, SysResultExt};
 
 use crate::error::AppError;
 
@@ -48,7 +52,7 @@ pub struct Config {
 }
 impl Config {
   // read and parse config file at `path`
-  pub fn load(path: *const libc::c_char) -> Result<Self, AppError> {
+  pub fn load(path: &CStr) -> Result<Self, AppError> {
     let mut raw = [0u8; CONFIG_BUF_SIZE];
     let len = read_file(path, &mut raw)?;
 
@@ -61,11 +65,8 @@ impl Config {
     Ok(config)
   }
 
-  // fork and exec the command described by `offsets`. we set `SIGCHLD` to `SIG_IGN` at startup, so
-  // the kernel reaps the child automatically. no `waitpid` needed here and no zombie accumulates
-  // even if this fires repeatedly over a long uptime. returns the fork failure to the caller
-  // instead of reporting it inline, so IDLED/RESUMED dispatch in state.rs is the one place that
-  // decides how a spawn failure gets surfaced.
+  // fork and exec the command described by `offsets`. `SIGCHLD` is set to `SIG_IGN` at startup, so
+  // the kernel reaps the child automatically.
   pub fn spawn(&self, offset: usize) -> Result<(), AppError> {
     unsafe {
       let pid = libc::fork();
@@ -139,10 +140,6 @@ impl Config {
         continue;
       }
 
-      // match immediately keep an owned result. `keyword` borrows `self.raw`, and that borrow must
-      // not still be alive by the time `create` below needs `&mut self`. `&mut self` always borrows
-      // the whole struct from the caller's side regardless of which fields the method body actually
-      // touches, so holding onto a `&[u8]` into `self.raw` across that call would conflict with it.
       let keyword = match str_at(&self.raw, tok_offsets[0]) {
         b"timeout" => Some(true),
         b"resume" => Some(false),
@@ -154,11 +151,8 @@ impl Config {
       let Some(timeout_s) = parse_decimal(str_at(&self.raw, tok_offsets[1])) else {
         continue;
       };
-      // a genuinely unparseable token (empty, non-digit, overflowing) is treated the same as an
-      // unrecognized keyword or too-few-tokens line above: skipped without comment, since that's
-      // this parser's general tolerance for malformed lines. a *successfully parsed* value of 0
-      // is a different kind of mistake. it's syntactically fine but not a usable timeout, so
-      // it's worth telling the user about.
+      // a *successfully parsed* value of 0 is syntactically fine but not a usable timeout, so it's
+      // worth complaining about.
       if timeout_s == 0 {
         AppError::InvalidTimeout.write_diagnostic();
         continue;
@@ -233,32 +227,19 @@ fn parse_decimal(bytes: &[u8]) -> Option<u32> {
   Some(val)
 }
 
-fn read_file(path: *const libc::c_char, buf: &mut [u8]) -> Result<usize, AppError> {
-  unsafe {
-    let fd = libc::open(path, libc::O_RDONLY);
-    if fd < 0 {
-      return Err(AppError::Sys(SysError::last("open")));
+fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, AppError> {
+  let fd = open(path, OFlags::RDONLY, Mode::empty()).syserr("open")?;
+  let mut offset = 0usize;
+  // Reserve the last byte of `buf` as a guaranteed-zero sentinel, so the final token in the
+  // file is NUL-terminated even if the file has no trailing newline.
+  let read_cap = buf.len() - 1;
+  while offset < read_cap {
+    let remaining = read(&fd, &mut buf[offset..read_cap]).syserr("read")?;
+    match remaining {
+      n if n > 0 => offset += n,
+      0 => break,
+      _ => {}
     }
-    let mut offset = 0usize;
-    // Reserve the last byte of `buf` as a guaranteed-zero sentinel, so the final token in the
-    // file is NUL-terminated even if the file has no trailing newline.
-    let read_cap = buf.len() - 1;
-    loop {
-      if offset >= read_cap {
-        break;
-      }
-      let n = libc::read(fd, buf.as_mut_ptr().add(offset).cast(), read_cap - offset);
-      match n {
-        n if n > 0 => offset += n as usize,
-        0 => break,
-        _ => {
-          let err = SysError::last("read");
-          libc::close(fd);
-          return Err(AppError::Sys(err));
-        }
-      }
-    }
-    libc::close(fd);
-    Ok(offset)
   }
+  Ok(offset)
 }

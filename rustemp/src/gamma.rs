@@ -1,4 +1,7 @@
-use wllib::error::SysError;
+use rustix::fd::OwnedFd;
+use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
+use rustix::mm::{MapFlags, ProtFlags, munmap};
+use wllib::error::SysResultExt;
 
 use crate::error::AppError;
 use crate::state::Config;
@@ -27,44 +30,39 @@ fn roundf(x: f64) -> f64 {
   unsafe { round(x) }
 }
 
-fn create_memfd(size: usize) -> Result<i32, AppError> {
+fn create_memfd(size: usize) -> Result<OwnedFd, AppError> {
   let size = size * 3 * 2;
-  let fd = unsafe { libc::memfd_create(c"rustemp-memfd".as_ptr(), libc::MFD_ALLOW_SEALING) };
-  if fd < 0 {
-    return Err(AppError::Sys(SysError::last("memfd_create")));
-  }
+  let fd = memfd_create(
+    c"rustemp-memfd",
+    MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING | MemfdFlags::NOEXEC_SEAL,
+  )
+  .syserr("memfd")?;
 
   // gamma tables contain three ramps (R, G, B), each with `size` elements of 16-bit values (2
   // bytes)
-  unsafe {
-    if libc::ftruncate(fd, size as libc::off_t) < 0 {
-      let err = SysError::last("ftruncate");
-      libc::close(fd);
-      return Err(AppError::Sys(err));
-    }
-  }
+  ftruncate(&fd, size as u64).syserr("ftruncate")?;
   Ok(fd)
 }
 
-fn mmap_slice<'a>(fd: i32, size: usize) -> Result<(*mut libc::c_void, &'a mut [u16]), AppError> {
-  let ptr = unsafe {
-    libc::mmap(
+fn mmap_slice<'a>(
+  fd: &OwnedFd,
+  size: usize,
+) -> Result<(*mut libc::c_void, &'a mut [u16]), AppError> {
+  let mmap_ptr = unsafe {
+    rustix::mm::mmap(
       core::ptr::null_mut(),
       size * 3 * 2,
-      libc::PROT_WRITE,
-      libc::MAP_SHARED,
+      ProtFlags::READ | ProtFlags::WRITE,
+      MapFlags::SHARED,
       fd,
       0,
     )
-  };
-  if ptr == libc::MAP_FAILED {
-    let err = SysError::last("mmap");
-    unsafe { libc::close(fd) };
-    return Err(AppError::Sys(err));
   }
-  let slice = unsafe { core::slice::from_raw_parts_mut(ptr.cast::<u16>(), size * 3) };
+  .syserr("mmap")?;
 
-  Ok((ptr, slice))
+  let slice = unsafe { core::slice::from_raw_parts_mut(mmap_ptr.cast::<u16>(), size * 3) };
+
+  Ok((mmap_ptr, slice))
 }
 
 // convert temperature in kelvin to rgb data
@@ -149,35 +147,35 @@ fn compute_channel_value(t: f64, gain: f64, offset: f64, config: &Config) -> f64
   let v = apply_contrast(v, config.contrast);
   let v = (v * config.brightness).clamp(0.0, 1.0);
   let v = apply_posterize(v, config.posterize_levels);
-  let v = (v > config.solarize_value).then_some(1.0 - v).unwrap_or(v);
+  let v = if v > config.solarize_value { 1.0 - v } else { v };
   if config.invert { 1.0 - v } else { v }
 }
 
-pub fn get_gamma_table_fd(size: usize, config: &Config) -> Result<i32, AppError> {
+pub fn get_gamma_table_fd(size: usize, config: &Config) -> Result<OwnedFd, AppError> {
   let (r_factor, g_factor, b_factor) = kelvin_to_rgb(config.temp);
   let fd = create_memfd(size)?;
-  let (mmap_ptr, slice) = mmap_slice(fd, size)?;
+  let (mmap_ptr, slice) = mmap_slice(&fd, size)?;
 
   // generate gamma curves scaled by the RGB color temperature factors
   for i in 0..size {
     let t = i as f64 / (size.saturating_sub(1).max(1)) as f64;
     // red
-    let r = config.disable_r.then_some(0.0).unwrap_or_else(|| {
+    let r = if config.disable_r { 0.0 } else { {
       compute_channel_value(t, r_factor * config.gain_r, config.offset_r, config)
-    });
+    } };
     slice[i] = (r * 65535.0) as u16;
     // greerg
-    let g = config.disable_g.then_some(0.0).unwrap_or_else(|| {
+    let g = if config.disable_g { 0.0 } else { {
       compute_channel_value(t, g_factor * config.gain_g, config.offset_g, config)
-    });
+    } };
     slice[size + i] = (g * 65535.0) as u16;
     // blue
-    let b = config.disable_b.then_some(0.0).unwrap_or_else(|| {
+    let b = if config.disable_b { 0.0 } else { {
       compute_channel_value(t, b_factor * config.gain_b, config.offset_b, config)
-    });
+    } };
     slice[2 * size + i] = (b * 65535.0) as u16;
   }
 
-  unsafe { libc::munmap(mmap_ptr, size * 3 * 2) };
+  unsafe { munmap(mmap_ptr, size * 3 * 2) }.syserr("munmap")?;
   Ok(fd)
 }

@@ -100,9 +100,7 @@ impl State {
     }
   }
 
-  // zwlr_gamma_control_v1::gamma_size(size): the compositor telling us how many entries its
-  // gamma ramp expects. We generate ramps for the configured color temperature and hand them
-  // over via set_gamma.
+  // zwlr_gamma_control_v1::gamma_size(size)
   fn handle_gamma_size(
     conn: &mut Connection,
     out: &Output,
@@ -116,7 +114,7 @@ impl State {
     let size = read_u32(data, 0) as usize;
 
     // get the fd containing the scaled image data
-    let g_fd = match gamma::get_gamma_table_fd(size, config) {
+    let fd = match gamma::get_gamma_table_fd(size, config) {
       Ok(fd) => fd,
       Err(e) => {
         e.write_diagnostic();
@@ -127,9 +125,8 @@ impl State {
     // set gamma table
     conn.send_logged(
       &Message::new(gamma_control_id, zwlr_gamma_control_v1::request::SET_GAMMA),
-      Some(g_fd),
+      Some(&fd),
     );
-    unsafe { libc::close(g_fd) };
   }
 }
 
