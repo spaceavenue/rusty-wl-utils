@@ -17,7 +17,13 @@
 //
 // command tokens are stored as *offsets* into the raw file buffer, not raw pointers.
 
-use core::ffi::CStr;
+use core::ffi::{CStr, c_char, c_int};
+
+unsafe extern "C" {
+  fn fork() -> c_int;
+  fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
+  fn _exit(status: c_int) -> !;
+}
 
 use rustix::fs::{Mode, OFlags, open};
 use rustix::io::read;
@@ -69,7 +75,7 @@ impl Config {
   // the kernel reaps the child automatically.
   pub fn spawn(&self, offset: usize) -> Result<(), AppError> {
     unsafe {
-      let pid = libc::fork();
+      let pid = fork();
       if pid < 0 {
         return Err(AppError::Sys(SysError::last("fork")));
       }
@@ -80,9 +86,9 @@ impl Config {
           self.raw.as_ptr().add(offset).cast(),
           core::ptr::null(),
         ];
-        libc::execvp(argv[0], argv.as_ptr());
+        execvp(argv[0], argv.as_ptr());
         // only reached if execvp fails
-        libc::_exit(1);
+        _exit(1);
       }
     }
     Ok(())

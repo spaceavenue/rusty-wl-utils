@@ -5,6 +5,9 @@ mod error;
 mod gamma;
 mod state;
 
+use core::ffi::{CStr, c_char, c_int, c_ulong};
+use core::ptr;
+
 use state::{Config, State};
 use wllib::cli::{LONG_OPTION_TERMINATOR, LongOption, NO_ARGUMENT, REQUIRED_ARGUMENT, getopt_long};
 use wllib::dispatch::dispatch_once;
@@ -16,9 +19,13 @@ use wllib::transport::Connection;
 use wllib::wire::Message;
 
 unsafe extern "C" {
-  static optarg: *const libc::c_char;
-  static mut optind: libc::c_int;
+  static optarg: *const c_char;
+  static mut optind: c_int;
+  fn strtod(nptr: *const c_char, endptr: *mut *mut c_char) -> f64;
+  fn strtoul(nptr: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_ulong;
+  fn exit(status: c_int) -> !;
 }
+
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
 
@@ -54,28 +61,24 @@ const USAGE: &str = concat!(
 
 fn bad_value() -> ! {
   write_stderr("rustemp: invalid or no value supplied\n");
-  unsafe { libc::exit(1) };
+  unsafe { exit(1) }
 }
 
-fn parse_f64(s: *const libc::c_char) -> Option<f64> {
+fn parse_f64(s: *const c_char) -> Option<f64> {
   if s.is_null() {
     return None;
   }
-  let mut end_ptr = core::ptr::null_mut();
-  let val = unsafe { libc::strtod(s, &raw mut end_ptr) };
-  if core::ptr::eq(end_ptr, s) {
-    None
-  } else {
-    Some(val)
-  }
+  let mut end_ptr = ptr::null_mut();
+  let val = unsafe { strtod(s, &raw mut end_ptr) };
+  if ptr::eq(end_ptr, s) { None } else { Some(val) }
 }
 
 // parses a "<r>:<g>:<b>" string, e.g. a --gain/--offset argument.
-fn parse_triplet(s: *const libc::c_char) -> Option<(f64, f64, f64)> {
+fn parse_triplet(s: *const c_char) -> Option<(f64, f64, f64)> {
   if s.is_null() {
     return None;
   }
-  let text = unsafe { core::ffi::CStr::from_ptr(s) }.to_str().ok()?;
+  let text = unsafe { CStr::from_ptr(s) }.to_str().ok()?;
   let mut parts = text.splitn(3, ':');
   let r = parts.next()?.parse::<f64>().ok()?;
   let g = parts.next()?.parse::<f64>().ok()?;
@@ -83,13 +86,13 @@ fn parse_triplet(s: *const libc::c_char) -> Option<(f64, f64, f64)> {
   Some((r, g, b))
 }
 
-fn parse_u32(s: *const libc::c_char) -> Option<u32> {
+fn parse_u32(s: *const c_char) -> Option<u32> {
   if s.is_null() {
     return None;
   }
-  let mut end_ptr = core::ptr::null_mut();
-  let val = unsafe { libc::strtoul(s, &raw mut end_ptr, 10) };
-  if core::ptr::eq(end_ptr, s) {
+  let mut end_ptr = ptr::null_mut();
+  let val = unsafe { strtoul(s, &raw mut end_ptr, 10) };
+  if ptr::eq(end_ptr, s) {
     None
   } else {
     u32::try_from(val).ok()
@@ -97,12 +100,12 @@ fn parse_u32(s: *const libc::c_char) -> Option<u32> {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> libc::c_int {
+pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   let mut config = Config::default();
   let mut temp_set = false;
   let optstring = c"t:k:w:g:G:O:c:b:p:s:ixyzh".as_ptr();
 
-  let mut longindex: libc::c_int = 0;
+  let mut longindex: c_int = 0;
   unsafe { optind = 1 };
   loop {
     let c = unsafe {
@@ -143,7 +146,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
       'z' => config.disable_b = true,
       'h' => {
         write_stdout(USAGE);
-        unsafe { libc::exit(1) }
+        return 1;
       }
       _ => (),
     }
@@ -151,14 +154,14 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
 
   if !temp_set {
     write_stderr(USAGE);
-    unsafe { libc::exit(1) };
+    return 1;
   }
 
   let mut conn = match Connection::connect() {
     Ok(c) => c,
     Err(e) => {
       e.write_diagnostic();
-      unsafe { libc::exit(1) };
+      return 1;
     }
   };
 
@@ -166,7 +169,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
 
   if let Err(e) = crawl(&mut conn, &mut state) {
     e.write_diagnostic();
-    unsafe { libc::exit(1) };
+    return 1;
   }
 
   // setup layer surfaces and gamma control for all monitors.

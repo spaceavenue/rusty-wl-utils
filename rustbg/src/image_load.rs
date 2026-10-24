@@ -1,3 +1,6 @@
+use core::ffi::{c_char, c_int};
+use core::ptr;
+
 use rustix::fs::{Mode, OFlags, open};
 use rustix::io::read;
 use rustix::pipe::{PipeFlags, pipe_with};
@@ -8,6 +11,17 @@ use wllib::fmt_lite::StringOnStack;
 use crate::error::AppError;
 use crate::state::Config;
 
+const SIGPIPE: c_int = 13;
+const SIG_DFL: usize = 0;
+
+unsafe extern "C" {
+  fn fork() -> c_int;
+  fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
+  fn _exit(status: c_int) -> !;
+  fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
+  fn signal(signum: c_int, handler: usize) -> usize;
+}
+
 // this was a bit hard to follow so im documenting for my own reference
 // we:
 // 1. create a unix pipe
@@ -15,14 +29,14 @@ use crate::state::Config;
 // 3. connect it's write end (stdout) to the write end of the pipe
 // 4. then read the raw bgra pixels from our read end, directly into the mmap_slice
 fn exec_and_read<const N: usize>(
-  argv: [*const libc::c_char; N],
+  argv: [*const c_char; N],
   buffer: &mut [u8],
 ) -> Result<(), AppError> {
   // create an unidirectional pipe to read data from child process
   // O_CLOEXEC closes the read/write ends in any other spawned children
   let (read_fd, write_fd) = pipe_with(PipeFlags::CLOEXEC).syserr("pipe")?;
 
-  let pid = unsafe { libc::fork() };
+  let pid = unsafe { fork() };
   if pid < 0 {
     return Err(AppError::Sys(SysError::last("fork")));
   }
@@ -35,7 +49,7 @@ fn exec_and_read<const N: usize>(
     let _ = stdio::dup2_stdout(&write_fd);
     drop(write_fd);
 
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    unsafe { signal(SIGPIPE, SIG_DFL) };
 
     // redirect stderr to /dev/null
     if let Ok(devnull) = open(c"/dev/null", OFlags::WRONLY, Mode::empty()) {
@@ -43,9 +57,9 @@ fn exec_and_read<const N: usize>(
       drop(devnull);
     }
 
-    unsafe { libc::execvp(argv[0], argv.as_ptr()) };
+    unsafe { execvp(argv[0], argv.as_ptr()) };
     // if execvp failed, kill child >:)
-    unsafe { libc::_exit(1) };
+    unsafe { _exit(1) };
   }
 
   // parent process context
@@ -63,7 +77,7 @@ fn exec_and_read<const N: usize>(
   }
 
   drop(read_fd);
-  unsafe { libc::waitpid(pid, core::ptr::null_mut(), 0) };
+  unsafe { waitpid(pid, ptr::null_mut(), 0) };
 
   if offset != buffer.len() {
     return Err(AppError::ImageDecodeError);
@@ -106,7 +120,7 @@ fn run_ffmpeg(
   }
 
   // build ffmpeg argument vector
-  let argv: [*const libc::c_char; 11] = [
+  let argv: [*const c_char; 11] = [
     c"ffmpeg".as_ptr(),
     c"-i".as_ptr(),
     path.as_ptr(),
@@ -117,7 +131,7 @@ fn run_ffmpeg(
     c"-pix_fmt".as_ptr(),
     c"bgra".as_ptr(),
     c"-".as_ptr(),
-    core::ptr::null(),
+    ptr::null(),
   ];
   exec_and_read(argv, buffer)
 }
@@ -140,13 +154,13 @@ fn run_dump_bgra(
   }
 
   // build dump-bgra argument vector: scale image to raw bgra pixels and stream to stdout
-  let argv: [*const libc::c_char; 6] = [
+  let argv: [*const c_char; 6] = [
     c"dump-bgra".as_ptr(),
     dim_str.as_ptr(),
     mode_str.as_ptr(),
     path.as_ptr(),
     c"-".as_ptr(),
-    core::ptr::null(),
+    ptr::null(),
   ];
   exec_and_read(argv, buffer)
 }

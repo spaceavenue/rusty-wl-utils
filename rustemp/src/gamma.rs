@@ -1,34 +1,14 @@
+use core::ffi::c_void;
+use core::{ptr, slice};
+
+use libm::{exp, log, pow, round};
 use rustix::fd::OwnedFd;
 use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
-use rustix::mm::{MapFlags, ProtFlags, munmap};
+use rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 use wllib::error::SysResultExt;
 
 use crate::error::AppError;
 use crate::state::Config;
-
-#[link(name = "c")]
-unsafe extern "C" {
-  fn pow(base: f64, exponent: f64) -> f64;
-  fn log(x: f64) -> f64;
-  fn exp(x: f64) -> f64;
-  fn round(x: f64) -> f64;
-}
-
-fn powf(base: f64, exponent: f64) -> f64 {
-  unsafe { pow(base, exponent) }
-}
-
-fn ln(x: f64) -> f64 {
-  unsafe { log(x) }
-}
-
-fn expf(x: f64) -> f64 {
-  unsafe { exp(x) }
-}
-
-fn roundf(x: f64) -> f64 {
-  unsafe { round(x) }
-}
 
 fn create_memfd(size: usize) -> Result<OwnedFd, AppError> {
   let size = size * 3 * 2;
@@ -44,13 +24,10 @@ fn create_memfd(size: usize) -> Result<OwnedFd, AppError> {
   Ok(fd)
 }
 
-fn mmap_slice<'a>(
-  fd: &OwnedFd,
-  size: usize,
-) -> Result<(*mut libc::c_void, &'a mut [u16]), AppError> {
+fn mmap_slice<'a>(fd: &OwnedFd, size: usize) -> Result<(*mut c_void, &'a mut [u16]), AppError> {
   let mmap_ptr = unsafe {
-    rustix::mm::mmap(
-      core::ptr::null_mut(),
+    mmap(
+      ptr::null_mut(),
       size * 3 * 2,
       ProtFlags::READ | ProtFlags::WRITE,
       MapFlags::SHARED,
@@ -60,7 +37,7 @@ fn mmap_slice<'a>(
   }
   .syserr("mmap")?;
 
-  let slice = unsafe { core::slice::from_raw_parts_mut(mmap_ptr.cast::<u16>(), size * 3) };
+  let slice = unsafe { slice::from_raw_parts_mut(mmap_ptr.cast::<u16>(), size * 3) };
 
   Ok((mmap_ptr, slice))
 }
@@ -73,15 +50,15 @@ fn kelvin_to_rgb(kelvin: f64) -> (f64, f64, f64) {
   let r = if temp <= 66.0 {
     1.0
   } else {
-    let r = (powf(329.698727446 * (temp - 60.0), -0.1332047592)) / 255.0;
+    let r = (pow(329.698727446 * (temp - 60.0), -0.1332047592)) / 255.0;
     r.clamp(0.0, 1.0)
   };
 
   let g = if temp <= 66.0 {
-    let g = (99.4708025861 * ln(temp) - 161.1195636025) / 255.0;
+    let g = (99.4708025861 * log(temp) - 161.1195636025) / 255.0;
     g.clamp(0.0, 1.0)
   } else {
-    let g = (powf(288.1221695283 * (temp - 60.0), -0.0755148492)) / 255.0;
+    let g = (pow(288.1221695283 * (temp - 60.0), -0.0755148492)) / 255.0;
     g.clamp(0.0, 1.0)
   };
 
@@ -90,7 +67,7 @@ fn kelvin_to_rgb(kelvin: f64) -> (f64, f64, f64) {
   } else if temp <= 19.0 {
     0.0
   } else {
-    let b = (138.5177312231 * ln(temp - 10.0) - 305.0447927307) / 255.0;
+    let b = (138.5177312231 * log(temp - 10.0) - 305.0447927307) / 255.0;
     b.clamp(0.0, 1.0)
   };
 
@@ -111,7 +88,7 @@ fn apply_gamma(t: f64, exp: f64) -> f64 {
   if (exp - 1.0).abs() < f64::EPSILON {
     return t;
   }
-  powf(t.max(0.0), 1.0 / exp)
+  pow(t.max(0.0), 1.0 / exp)
 }
 
 // sigmoid contrast: pushes values away from (amount > 0) or toward (amount < 0) the midpoint,
@@ -122,7 +99,7 @@ fn apply_contrast(t: f64, amount: f64) -> f64 {
     return t;
   }
   let k = amount * 10.0;
-  let sig = |x: f64| 1.0 / (1.0 + expf(-k * (x - 0.5)));
+  let sig = |x: f64| 1.0 / (1.0 + exp(-k * (x - 0.5)));
   let s0 = sig(0.0);
   let s1 = sig(1.0);
   ((sig(t) - s0) / (s1 - s0)).clamp(0.0, 1.0)
@@ -134,7 +111,7 @@ fn apply_posterize(t: f64, levels: u32) -> f64 {
   }
 
   let steps = f64::from(levels - 1);
-  roundf(t * steps) / steps
+  round(t * steps) / steps
 }
 
 // runs one channel's normalized input `t` (0..1) through the full ramp-op pipeline. `gain` is
@@ -147,7 +124,11 @@ fn compute_channel_value(t: f64, gain: f64, offset: f64, config: &Config) -> f64
   let v = apply_contrast(v, config.contrast);
   let v = (v * config.brightness).clamp(0.0, 1.0);
   let v = apply_posterize(v, config.posterize_levels);
-  let v = if v > config.solarize_value { 1.0 - v } else { v };
+  let v = if v > config.solarize_value {
+    1.0 - v
+  } else {
+    v
+  };
   if config.invert { 1.0 - v } else { v }
 }
 
@@ -160,19 +141,25 @@ pub fn get_gamma_table_fd(size: usize, config: &Config) -> Result<OwnedFd, AppEr
   for i in 0..size {
     let t = i as f64 / (size.saturating_sub(1).max(1)) as f64;
     // red
-    let r = if config.disable_r { 0.0 } else { {
+    let r = if config.disable_r {
+      0.0
+    } else {
       compute_channel_value(t, r_factor * config.gain_r, config.offset_r, config)
-    } };
+    };
     slice[i] = (r * 65535.0) as u16;
     // greerg
-    let g = if config.disable_g { 0.0 } else { {
+    let g = if config.disable_g {
+      0.0
+    } else {
       compute_channel_value(t, g_factor * config.gain_g, config.offset_g, config)
-    } };
+    };
     slice[size + i] = (g * 65535.0) as u16;
     // blue
-    let b = if config.disable_b { 0.0 } else { {
+    let b = if config.disable_b {
+      0.0
+    } else {
       compute_channel_value(t, b_factor * config.gain_b, config.offset_b, config)
-    } };
+    };
     slice[2 * size + i] = (b * 65535.0) as u16;
   }
 

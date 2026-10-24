@@ -5,6 +5,8 @@ pub mod config;
 pub mod error;
 pub mod state;
 
+use core::ffi::{c_char, c_int};
+
 use rustix::fs::{Access, access};
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
@@ -17,30 +19,48 @@ use wllib::wire::Message;
 use crate::config::Config;
 use crate::state::State;
 
+const SIGCHLD: c_int = 17;
+const SIGUSR1: c_int = 10;
+const SIG_IGN: usize = 1;
+
+#[repr(C)]
+struct SigAction {
+  sa_sigaction: usize,
+  sa_mask: [u64; 16],
+  sa_flags: c_int,
+  sa_restorer: Option<unsafe extern "C" fn()>,
+}
+
+unsafe extern "C" {
+  fn signal(sig: c_int, handler: usize) -> usize;
+  fn sigaction(sig: c_int, act: *const SigAction, oact: *mut SigAction) -> c_int;
+  fn sigemptyset(set: *mut [u64; 16]) -> c_int;
+}
+
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
 
 // flag to track the suspended state
 static IS_SUSPENDED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-extern "C" fn handle_sigusr1(_sig: libc::c_int) {
+extern "C" fn handle_sigusr1(_sig: c_int) {
   // fetch_xor with true inverts the current boolean value
   IS_SUSPENDED.fetch_xor(true, core::sync::atomic::Ordering::Relaxed);
 }
 
-fn write_usage() -> ! {
+fn write_usage() -> c_int {
   write_stderr("Usage: rustidle <config-file>\n");
-  unsafe { libc::exit(1) };
+  1
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> libc::c_int {
+pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   if argc != 2 {
-    write_usage()
+    return write_usage();
   }
   let config_path = unsafe { *argv.add(1) };
   if config_path.is_null() {
-    write_usage()
+    return write_usage();
   }
   let config_path = unsafe { core::ffi::CStr::from_ptr(config_path) };
   if access(config_path, Access::EXISTS).is_err() {
@@ -48,37 +68,37 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
     return 1;
   }
 
-  // tells kernel to reap child processes automatically, avoiding watipid
-  unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+  // tells kernel to reap child processes automatically, avoiding waitpid
+  unsafe { signal(SIGCHLD, SIG_IGN) };
   // handle SIGUSR1
   unsafe {
-    let mut sa: libc::sigaction = core::mem::zeroed();
-    sa.sa_sigaction = handle_sigusr1 as *const () as libc::sighandler_t;
+    let mut sa: SigAction = core::mem::zeroed();
+    sa.sa_sigaction = handle_sigusr1 as *const () as usize;
     // sa_flags = 0 so that blocking syscalls (recv, etc.) fail with EINTR instead of restarting
     sa.sa_flags = 0;
-    libc::sigemptyset(&raw mut sa.sa_mask);
-    libc::sigaction(libc::SIGUSR1, &raw const sa, core::ptr::null_mut());
+    sigemptyset(&raw mut sa.sa_mask);
+    sigaction(SIGUSR1, &raw const sa, core::ptr::null_mut());
   }
 
   let mut conn = match Connection::connect() {
     Ok(c) => c,
     Err(e) => {
       e.write_diagnostic();
-      unsafe { libc::exit(1) };
+      return 1;
     }
   };
   let config = match Config::load(config_path) {
     Ok(c) => c,
     Err(e) => {
       e.write_diagnostic();
-      unsafe { libc::exit(1) }
+      return 1;
     }
   };
   let mut state = State::init(config);
 
   if let Err(e) = crawl(&mut conn, &mut state) {
     e.write_diagnostic();
-    unsafe { libc::exit(1) };
+    return 1;
   }
 
   let create_notifs = |conn: &mut Connection, state: &mut State| {
@@ -112,7 +132,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
     }
 
     while IS_SUSPENDED.load(core::sync::atomic::Ordering::Relaxed) {
-      unsafe { libc::pause() };
+      rustix::event::pause();
     }
 
     if was_suspended {

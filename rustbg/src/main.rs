@@ -6,6 +6,8 @@ pub mod image_load;
 pub mod shm;
 pub mod state;
 
+use core::ffi::{c_char, c_int};
+
 use rustix::fs::{Access, access};
 use wllib::cli;
 use wllib::dispatch::dispatch_once;
@@ -19,8 +21,8 @@ use wllib::wire::Message;
 use crate::state::{Config, State};
 
 unsafe extern "C" {
-  static optarg: *const libc::c_char;
-  static mut optind: libc::c_int;
+  static optarg: *const c_char;
+  static mut optind: c_int;
 }
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
@@ -31,17 +33,17 @@ const LONGOPTS: [cli::LongOption; 3] = [
   cli::LONG_OPTION_TERMINATOR,
 ];
 
-fn write_usage() -> ! {
+fn write_usage() -> c_int {
   write_stderr("Usage: rustbg [-f | --fill] [-n | --namespace <name>] <image path>\n");
-  unsafe { libc::exit(1) }
+  1
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> libc::c_int {
+pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   let mut config = Config::default();
   let optstring = c"fn:".as_ptr();
 
-  let mut longindex: libc::c_int = 0;
+  let mut longindex: c_int = 0;
   unsafe { optind = 1 };
   loop {
     let c = unsafe {
@@ -67,38 +69,38 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
         config.namespace.clear();
         config.namespace.push_cstr(cstr);
       }
-      _ => write_usage(),
+      _ => return write_usage(),
     }
   }
 
   let optind_val = unsafe { optind };
-  if optind_val < 0 || optind_val >= argc as libc::c_int {
+  if optind_val < 0 || optind_val >= argc as c_int {
     write_stderr("[rustbg] no image path supplied\n");
     write_usage();
   }
   let raw_arg = unsafe { *argv.add(optind_val as usize) };
   if raw_arg.is_null() {
     write_stderr("[rustbg] no image path supplied\n");
-    write_usage()
+    return write_usage();
   }
   let cstr = unsafe { core::ffi::CStr::from_ptr(raw_arg) };
   config.image_path.push_cstr(cstr);
 
   if config.image_path.is_empty() {
     write_stderr("[rustbg] no image path supplied\n");
-    write_usage()
+    return write_usage();
   }
 
   if access(config.image_path.as_c_str(), Access::EXISTS).is_err() {
     write_stderr("[rustbg] cannot open image file.\n");
-    write_usage()
+    return write_usage();
   }
 
   let mut conn = match Connection::connect() {
     Ok(c) => c,
     Err(e) => {
       e.write_diagnostic();
-      unsafe { libc::exit(1) };
+      return 1;
     }
   };
 
@@ -106,7 +108,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut libc::c_char) -> li
 
   if let Err(e) = crawl(&mut conn, &mut state) {
     e.write_diagnostic();
-    unsafe { libc::exit(1) };
+    return 1;
   }
 
   // setup layer surfaces and gamma control for all monitors.
