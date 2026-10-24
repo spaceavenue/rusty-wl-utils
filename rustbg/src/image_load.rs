@@ -1,7 +1,7 @@
-use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{Mode, OFlags, open};
-use rustix::io::{dup2, read};
+use rustix::io::read;
 use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::stdio;
 use wllib::error::{SysError, SysResultExt};
 use wllib::fmt_lite::StringOnStack;
 
@@ -32,18 +32,14 @@ fn exec_and_read<const N: usize>(
   if pid == 0 {
     drop(read_fd);
 
-    let mut stdout = unsafe { OwnedFd::from_raw_fd(1) };
-    let _ = dup2(&write_fd, &mut stdout);
-    core::mem::forget(stdout);
+    let _ = stdio::dup2_stdout(&write_fd);
     drop(write_fd);
 
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
 
     // redirect stderr to /dev/null
     if let Ok(devnull) = open(c"/dev/null", OFlags::WRONLY, Mode::empty()) {
-      let mut stderr = unsafe { OwnedFd::from_raw_fd(2) };
-      let _ = dup2(&devnull, &mut stderr);
-      core::mem::forget(stderr);
+      let _ = stdio::dup2_stderr(&devnull);
       drop(devnull);
     }
 
