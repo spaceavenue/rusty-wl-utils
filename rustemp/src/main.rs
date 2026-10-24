@@ -5,8 +5,7 @@ mod error;
 mod gamma;
 mod state;
 
-use core::ffi::{CStr, c_char, c_int, c_ulong};
-use core::ptr;
+use core::ffi::{CStr, c_char, c_int};
 
 use state::{Config, State};
 use wllib::cli::{LONG_OPTION_TERMINATOR, LongOption, NO_ARGUMENT, REQUIRED_ARGUMENT, getopt_long};
@@ -21,8 +20,6 @@ use wllib::wire::Message;
 unsafe extern "C" {
   static optarg: *const c_char;
   static mut optind: c_int;
-  fn strtod(nptr: *const c_char, endptr: *mut *mut c_char) -> f64;
-  fn strtoul(nptr: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_ulong;
   fn exit(status: c_int) -> !;
 }
 
@@ -68,9 +65,11 @@ fn parse_f64(s: *const c_char) -> Option<f64> {
   if s.is_null() {
     return None;
   }
-  let mut end_ptr = ptr::null_mut();
-  let val = unsafe { strtod(s, &raw mut end_ptr) };
-  if ptr::eq(end_ptr, s) { None } else { Some(val) }
+  let c_str = unsafe { CStr::from_ptr(s) };
+  if c_str.is_empty() {
+    return None;
+  }
+  c_str.to_str().ok()?.parse::<f64>().ok()
 }
 
 // parses a "<r>:<g>:<b>" string, e.g. a --gain/--offset argument.
@@ -78,8 +77,11 @@ fn parse_triplet(s: *const c_char) -> Option<(f64, f64, f64)> {
   if s.is_null() {
     return None;
   }
-  let text = unsafe { CStr::from_ptr(s) }.to_str().ok()?;
-  let mut parts = text.splitn(3, ':');
+  let c_str = unsafe { CStr::from_ptr(s) };
+  if c_str.is_empty() {
+    return None;
+  }
+  let mut parts = c_str.to_str().ok()?.splitn(3, ':');
   let r = parts.next()?.parse::<f64>().ok()?;
   let g = parts.next()?.parse::<f64>().ok()?;
   let b = parts.next()?.parse::<f64>().ok()?;
@@ -90,13 +92,11 @@ fn parse_u32(s: *const c_char) -> Option<u32> {
   if s.is_null() {
     return None;
   }
-  let mut end_ptr = ptr::null_mut();
-  let val = unsafe { strtoul(s, &raw mut end_ptr, 10) };
-  if ptr::eq(end_ptr, s) {
-    None
-  } else {
-    u32::try_from(val).ok()
+  let c_str = unsafe { CStr::from_ptr(s) };
+  if c_str.is_empty() {
+    return None;
   }
+  c_str.to_str().ok()?.parse::<u32>().ok()
 }
 
 #[unsafe(no_mangle)]
@@ -120,6 +120,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
     if c == -1 {
       break;
     }
+
     match c as u8 as char {
       't' => {
         config.temp = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value());
