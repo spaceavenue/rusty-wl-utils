@@ -1,8 +1,9 @@
 [package]
 name = "rustidle"
-version = "1.0.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-rustix = { version = "1.1.5", default-features = false, features = ["fs", "event"] }
-wllib = { git = "https://github.com/spaceavenue/wllib.git" }
+rustix = { workspace = true, features = ["fs", "event"] }
+wllib = { workspace = true }
+shared = { workspace = true }

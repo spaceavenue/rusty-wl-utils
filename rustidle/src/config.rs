@@ -17,19 +17,20 @@
 //
 // command tokens are stored as *offsets* into the raw file buffer, not raw pointers.
 
-use core::ffi::{CStr, c_char, c_int};
+use core::ffi::{c_char, c_int};
+use core::{array, ptr};
+
+use rustix::fs::{Mode, OFlags, open};
+use rustix::io::read;
+use shared::exit;
+use wllib::error::{SysError, SysResultExt};
+
+use crate::error::AppError;
 
 unsafe extern "C" {
   fn fork() -> c_int;
   fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
-  fn _exit(status: c_int) -> !;
 }
-
-use rustix::fs::{Mode, OFlags, open};
-use rustix::io::read;
-use wllib::error::{SysError, SysResultExt};
-
-use crate::error::AppError;
 
 pub const MAX_ENTRIES: usize = 16;
 pub const CONFIG_BUF_SIZE: usize = 4096;
@@ -40,6 +41,7 @@ pub struct Entry {
   pub idle_argv: Option<usize>,
   pub resume_argv: Option<usize>,
 }
+
 impl Entry {
   fn new(timeout_ms: u32) -> Self {
     Self {
@@ -56,15 +58,16 @@ pub struct Config {
   pub entries: [Entry; MAX_ENTRIES],
   pub entry_len: usize,
 }
+
 impl Config {
   // read and parse config file at `path`
-  pub fn load(path: &CStr) -> Result<Self, AppError> {
+  pub fn load(path: &str) -> Result<Self, AppError> {
     let mut raw = [0u8; CONFIG_BUF_SIZE];
     let len = read_file(path, &mut raw)?;
 
     let mut config = Config {
       raw,
-      entries: core::array::from_fn(|_| Entry::default()),
+      entries: array::from_fn(|_| Entry::default()),
       entry_len: 0,
     };
     config.parse(len);
@@ -81,14 +84,14 @@ impl Config {
       }
       if pid == 0 {
         let argv = [
-          c"/usr/bin/sh".as_ptr(),
+          c"sh".as_ptr(),
           c"-c".as_ptr(),
           self.raw.as_ptr().add(offset).cast(),
-          core::ptr::null(),
+          ptr::null(),
         ];
         execvp(argv[0], argv.as_ptr());
         // only reached if execvp fails
-        _exit(1);
+        exit::exit(1);
       }
     }
     Ok(())
@@ -233,7 +236,7 @@ fn parse_decimal(bytes: &[u8]) -> Option<u32> {
   Some(val)
 }
 
-fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, AppError> {
+fn read_file(path: &str, buf: &mut [u8]) -> Result<usize, AppError> {
   let fd = open(path, OFlags::RDONLY, Mode::empty()).syserr("open")?;
   let mut offset = 0usize;
   // Reserve the last byte of `buf` as a guaranteed-zero sentinel, so the final token in the
@@ -241,11 +244,10 @@ fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, AppError> {
   let read_cap = buf.len() - 1;
   while offset < read_cap {
     let remaining = read(&fd, &mut buf[offset..read_cap]).syserr("read")?;
-    match remaining {
-      n if n > 0 => offset += n,
-      0 => break,
-      _ => {}
+    if remaining == 0 {
+      break;
     }
+    offset += remaining;
   }
   Ok(offset)
 }

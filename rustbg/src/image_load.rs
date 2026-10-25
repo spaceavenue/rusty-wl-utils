@@ -4,22 +4,19 @@ use core::ptr;
 use rustix::fs::{Mode, OFlags, open};
 use rustix::io::read;
 use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::process::{Pid, WaitOptions, waitpid};
 use rustix::stdio;
+use shared::exit;
+use shared::signal::{SIG_DFL, SIGPIPE, signal};
 use wllib::error::{SysError, SysResultExt};
 use wllib::fmt_lite::StringOnStack;
 
 use crate::error::AppError;
 use crate::state::Config;
 
-const SIGPIPE: c_int = 13;
-const SIG_DFL: usize = 0;
-
 unsafe extern "C" {
   fn fork() -> c_int;
   fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
-  fn _exit(status: c_int) -> !;
-  fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
-  fn signal(signum: c_int, handler: usize) -> usize;
 }
 
 // this was a bit hard to follow so im documenting for my own reference
@@ -59,7 +56,7 @@ fn exec_and_read<const N: usize>(
 
     unsafe { execvp(argv[0], argv.as_ptr()) };
     // if execvp failed, kill child >:)
-    unsafe { _exit(1) };
+    exit::exit(1);
   }
 
   // parent process context
@@ -77,7 +74,8 @@ fn exec_and_read<const N: usize>(
   }
 
   drop(read_fd);
-  unsafe { waitpid(pid, ptr::null_mut(), 0) };
+  let pid = Pid::from_raw(pid);
+  waitpid(pid, WaitOptions::empty()).syserr("waitpid")?;
 
   if offset != buffer.len() {
     return Err(AppError::ImageDecodeError);

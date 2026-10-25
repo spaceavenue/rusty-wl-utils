@@ -9,7 +9,7 @@ pub mod state;
 use core::ffi::{c_char, c_int};
 
 use rustix::fs::{Access, access};
-use wllib::cli;
+use shared::cli::{Arg, ArgParser, get_args_iter};
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
 use wllib::io::write_stderr;
@@ -20,18 +20,8 @@ use wllib::wire::Message;
 
 use crate::state::{Config, State};
 
-unsafe extern "C" {
-  static optarg: *const c_char;
-  static mut optind: c_int;
-}
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
-
-const LONGOPTS: [cli::LongOption; 3] = [
-  cli::LongOption::new(c"fill", cli::NO_ARGUMENT, 'f'),
-  cli::LongOption::new(c"namespace", cli::REQUIRED_ARGUMENT, 'n'),
-  cli::LONG_OPTION_TERMINATOR,
-];
 
 fn write_usage() -> c_int {
   write_stderr("Usage: rustbg [-f | --fill] [-n | --namespace <name>] <image path>\n");
@@ -41,50 +31,31 @@ fn write_usage() -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   let mut config = Config::default();
-  let optstring = c"fn:".as_ptr();
 
-  let mut longindex: c_int = 0;
-  unsafe { optind = 1 };
-  loop {
-    let c = unsafe {
-      cli::getopt_long(
-        argc as _,
-        argv,
-        optstring,
-        LONGOPTS.as_ptr(),
-        &raw mut longindex,
-      )
-    };
-    if c == -1 {
-      break;
-    }
-    match c as u8 as char {
-      'f' => config.fill = true,
-      'n' => {
-        if unsafe { optarg.is_null() } {
+  if argc <= 0 || argv.is_null() {
+    return 1;
+  }
+
+  let args_iter = unsafe { get_args_iter(argc as usize, argv) };
+
+  let mut parser = ArgParser::new(args_iter);
+  while let Some(arg) = parser.next_arg() {
+    match arg {
+      Arg::Short('f') | Arg::Long("fill") => config.fill = true,
+      Arg::Short('n') | Arg::Long("namespace") => {
+        let Some(namespace) = parser.next_val() else {
           write_stderr("[rustbg] no namespace provided.");
-          write_usage();
-        }
-        let cstr = unsafe { core::ffi::CStr::from_ptr(optarg) };
+          return write_usage();
+        };
         config.namespace.clear();
-        config.namespace.push_cstr(cstr);
+        config.namespace.push(namespace);
       }
-      _ => return write_usage(),
+      Arg::Value(path) => {
+        config.image_path.push(path);
+      }
+      Arg::Short(_) | Arg::Long(_) => return write_usage(),
     }
   }
-
-  let optind_val = unsafe { optind };
-  if optind_val < 0 || optind_val >= argc as c_int {
-    write_stderr("[rustbg] no image path supplied\n");
-    write_usage();
-  }
-  let raw_arg = unsafe { *argv.add(optind_val as usize) };
-  if raw_arg.is_null() {
-    write_stderr("[rustbg] no image path supplied\n");
-    return write_usage();
-  }
-  let cstr = unsafe { core::ffi::CStr::from_ptr(raw_arg) };
-  config.image_path.push_cstr(cstr);
 
   if config.image_path.is_empty() {
     write_stderr("[rustbg] no image path supplied\n");

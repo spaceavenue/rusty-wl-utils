@@ -6,8 +6,12 @@ pub mod error;
 pub mod state;
 
 use core::ffi::{c_char, c_int};
+use core::mem;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use rustix::fs::{Access, access};
+use shared::cli::Arg::Value;
+use shared::cli::{ArgParser, get_args_iter};
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
 use wllib::io::write_stderr;
@@ -41,11 +45,11 @@ unsafe extern "C" {
 unsafe extern "C" {}
 
 // flag to track the suspended state
-static IS_SUSPENDED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static IS_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn handle_sigusr1(_sig: c_int) {
   // fetch_xor with true inverts the current boolean value
-  IS_SUSPENDED.fetch_xor(true, core::sync::atomic::Ordering::Relaxed);
+  IS_SUSPENDED.fetch_xor(true, Ordering::Relaxed);
 }
 
 fn write_usage() -> c_int {
@@ -58,11 +62,17 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   if argc != 2 {
     return write_usage();
   }
-  let config_path = unsafe { *argv.add(1) };
-  if config_path.is_null() {
-    return write_usage();
+  let args_iter = unsafe { get_args_iter(argc as usize, argv) };
+  let mut parser = ArgParser::new(args_iter);
+  let mut config_path = "";
+
+  while let Some(arg) = parser.next_arg() {
+    let Value(path) = arg else {
+      return write_usage();
+    };
+    config_path = path;
   }
-  let config_path = unsafe { core::ffi::CStr::from_ptr(config_path) };
+
   if access(config_path, Access::EXISTS).is_err() {
     write_stderr("[rustidle] failed to open config file.\n");
     return 1;
@@ -72,7 +82,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   unsafe { signal(SIGCHLD, SIG_IGN) };
   // handle SIGUSR1
   unsafe {
-    let mut sa: SigAction = core::mem::zeroed();
+    let mut sa: SigAction = mem::zeroed();
     sa.sa_sigaction = handle_sigusr1 as *const () as usize;
     // sa_flags = 0 so that blocking syscalls (recv, etc.) fail with EINTR instead of restarting
     sa.sa_flags = 0;
@@ -87,6 +97,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
       return 1;
     }
   };
+
   let config = match Config::load(config_path) {
     Ok(c) => c,
     Err(e) => {
@@ -122,7 +133,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
 
   // main wayland event dispatch loop
   loop {
-    if IS_SUSPENDED.load(core::sync::atomic::Ordering::Relaxed) {
+    if IS_SUSPENDED.load(Ordering::Relaxed) {
       for i in 0..state.config.entry_len {
         let notif = &mut state.notifications[i];
         let msg = Message::new(notif.id, ext_idle_notifier_v1::request::DESTROY);
@@ -131,7 +142,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
       was_suspended = true;
     }
 
-    while IS_SUSPENDED.load(core::sync::atomic::Ordering::Relaxed) {
+    while IS_SUSPENDED.load(Ordering::Relaxed) {
       rustix::event::pause();
     }
 
@@ -144,7 +155,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
       Ok(()) => (),
       Err(ConnectionClosed) => break,
       Err(e) => {
-        if IS_SUSPENDED.load(core::sync::atomic::Ordering::Relaxed) {
+        if IS_SUSPENDED.load(Ordering::Relaxed) {
           continue;
         }
         e.write_diagnostic();

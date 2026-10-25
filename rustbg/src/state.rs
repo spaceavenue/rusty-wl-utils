@@ -8,7 +8,7 @@ use wllib::wire::{Message, read_u32};
 
 use crate::shm;
 
-pub const MAX_OUTPUTS: usize = 8;
+const MAX_OUTPUTS: usize = 8;
 
 // tracks registered object ids
 #[derive(Default)]
@@ -50,7 +50,7 @@ impl Default for Config {
 
 pub struct State {
   pub global: Global,
-  pub outputs: [Output; 4],
+  pub outputs: [Output; MAX_OUTPUTS],
   pub output_len: usize,
   pub config: Config,
 }

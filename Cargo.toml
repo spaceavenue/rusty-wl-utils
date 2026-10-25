@@ -2,7 +2,17 @@ cargo-features = ["panic-immediate-abort"]
 
 [workspace]
 resolver = "2"
-members = ["rustbg", "rustemp", "rustidle", "rust-randr"]
+members = ["rustbg", "rustemp", "rustidle", "rust-randr", "shared"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+
+[workspace.dependencies]
+rustix = { version = "1.1.5", default-features = false }
+wllib = { git = "https://github.com/spaceavenue/wllib.git" }
+libm = { version = "0.2.16", default-features = false }
+shared = { path = "shared" }
 
 [profile.dev]
 panic = "immediate-abort"

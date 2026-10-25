@@ -6,7 +6,7 @@ use wllib::registry::{GlobalHandler, bind, clamp_version};
 use wllib::transport::Connection;
 use wllib::wire::{Message, read_i32, read_str, read_u32};
 
-pub const MAX_OUTPUTS: usize = 8;
+const MAX_OUTPUTS: usize = 8;
 
 // `wl_output::geometry`'s `transform` arg, decoded from `wayland.xml`'s `wl_output.transform`
 // enum (0-7).

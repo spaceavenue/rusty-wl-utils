@@ -5,10 +5,10 @@ mod error;
 mod gamma;
 mod state;
 
-use core::ffi::{CStr, c_char, c_int};
+use core::ffi::{c_char, c_int};
 
+use shared::cli::{Arg, ArgParser, get_args_iter};
 use state::{Config, State};
-use wllib::cli::{LONG_OPTION_TERMINATOR, LongOption, NO_ARGUMENT, REQUIRED_ARGUMENT, getopt_long};
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
 use wllib::io::{write_stderr, write_stdout};
@@ -17,33 +17,8 @@ use wllib::registry::crawl;
 use wllib::transport::Connection;
 use wllib::wire::Message;
 
-unsafe extern "C" {
-  static optarg: *const c_char;
-  static mut optind: c_int;
-  fn exit(status: c_int) -> !;
-}
-
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
-
-const LONGOPTS: [LongOption; 16] = [
-  LongOption::new(c"temp", REQUIRED_ARGUMENT, 't'),
-  LongOption::new(c"black", REQUIRED_ARGUMENT, 'k'),
-  LongOption::new(c"white", REQUIRED_ARGUMENT, 'w'),
-  LongOption::new(c"gamma", REQUIRED_ARGUMENT, 'g'),
-  LongOption::new(c"gain", REQUIRED_ARGUMENT, 'G'),
-  LongOption::new(c"offset", REQUIRED_ARGUMENT, 'O'),
-  LongOption::new(c"contrast", REQUIRED_ARGUMENT, 'c'),
-  LongOption::new(c"brightness", REQUIRED_ARGUMENT, 'b'),
-  LongOption::new(c"posterize", REQUIRED_ARGUMENT, 'p'),
-  LongOption::new(c"solarize", REQUIRED_ARGUMENT, 's'),
-  LongOption::new(c"invert", NO_ARGUMENT, 'i'),
-  LongOption::new(c"no-red", NO_ARGUMENT, 'x'),
-  LongOption::new(c"no-green", NO_ARGUMENT, 'y'),
-  LongOption::new(c"no-blue", NO_ARGUMENT, 'z'),
-  LongOption::new(c"help", NO_ARGUMENT, 'h'),
-  LONG_OPTION_TERMINATOR,
-];
 
 const USAGE: &str = concat!(
   "Usage: rustemp -t <kelvin>\n",
@@ -57,105 +32,88 @@ const USAGE: &str = concat!(
 );
 
 fn bad_value() -> ! {
-  write_stderr("rustemp: invalid or no value supplied\n");
-  unsafe { exit(1) }
+  shared::exit::die("rustemp: invalid or no value supplied\n")
 }
 
-fn parse_f64(s: *const c_char) -> Option<f64> {
-  if s.is_null() {
-    return None;
-  }
-  let c_str = unsafe { CStr::from_ptr(s) };
-  if c_str.is_empty() {
-    return None;
-  }
-  c_str.to_str().ok()?.parse::<f64>().ok()
+fn parse_f64(s: &str) -> Option<f64> {
+  s.parse::<f64>().ok()
 }
 
 // parses a "<r>:<g>:<b>" string, e.g. a --gain/--offset argument.
-fn parse_triplet(s: *const c_char) -> Option<(f64, f64, f64)> {
-  if s.is_null() {
-    return None;
-  }
-  let c_str = unsafe { CStr::from_ptr(s) };
-  if c_str.is_empty() {
-    return None;
-  }
-  let mut parts = c_str.to_str().ok()?.splitn(3, ':');
+fn parse_triplet(s: &str) -> Option<(f64, f64, f64)> {
+  let mut parts = s.splitn(3, ':');
   let r = parts.next()?.parse::<f64>().ok()?;
   let g = parts.next()?.parse::<f64>().ok()?;
   let b = parts.next()?.parse::<f64>().ok()?;
   Some((r, g, b))
 }
 
-fn parse_u32(s: *const c_char) -> Option<u32> {
-  if s.is_null() {
-    return None;
+fn parse_u32(s: &str) -> Option<u32> {
+  s.parse::<u32>().ok()
+}
+
+fn parse_args<'a>(args_iter: impl Iterator<Item = &'a str>, config: &mut Config) -> Option<()> {
+  let mut parser = ArgParser::new(args_iter);
+  while let Some(arg) = parser.next_arg() {
+    match arg {
+      Arg::Short('t') | Arg::Long("temp") => {
+        config.temp = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('k') | Arg::Long("black") => {
+        config.level_black = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('w') | Arg::Long("white") => {
+        config.level_white = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('g') | Arg::Long("gamma") => {
+        config.gamma = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('G') | Arg::Long("gain") => {
+        let (r, g, b) = parse_triplet(parser.next_val()?)?;
+        (config.gain_r, config.gain_g, config.gain_b) = (r, g, b);
+      }
+      Arg::Short('O') | Arg::Long("offset") => {
+        let (r, g, b) = parse_triplet(parser.next_val()?)?;
+        (config.offset_r, config.offset_g, config.offset_b) = (r, g, b);
+      }
+      Arg::Short('c') | Arg::Long("contrast") => {
+        config.contrast = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('b') | Arg::Long("brightness") => {
+        config.brightness = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('p') | Arg::Long("posterize") => {
+        config.posterize_levels = parse_u32(parser.next_val()?)?;
+      }
+      Arg::Short('s') | Arg::Long("solarize") => {
+        config.solarize_value = parse_f64(parser.next_val()?)?;
+      }
+      Arg::Short('i') | Arg::Long("invert") => config.invert = true,
+      Arg::Short('x') | Arg::Long("no-red") => config.disable_r = true,
+      Arg::Short('y') | Arg::Long("no-green") => config.disable_g = true,
+      Arg::Short('z') | Arg::Long("no-blue") => config.disable_b = true,
+      Arg::Short('h') | Arg::Long("help") => {
+        write_stdout(USAGE);
+      }
+      _ => return None,
+    }
   }
-  let c_str = unsafe { CStr::from_ptr(s) };
-  if c_str.is_empty() {
-    return None;
-  }
-  c_str.to_str().ok()?.parse::<u32>().ok()
+  Some(())
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
-  let mut config = Config::default();
-  let mut temp_set = false;
-  let optstring = c"t:k:w:g:G:O:c:b:p:s:ixyzh".as_ptr();
-
-  let mut longindex: c_int = 0;
-  unsafe { optind = 1 };
-  loop {
-    let c = unsafe {
-      getopt_long(
-        argc as _,
-        argv,
-        optstring,
-        LONGOPTS.as_ptr(),
-        &raw mut longindex,
-      )
-    };
-    if c == -1 {
-      break;
-    }
-
-    match c as u8 as char {
-      't' => {
-        config.temp = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value());
-        temp_set = true;
-      }
-      'k' => config.level_black = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      'w' => config.level_white = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      'g' => config.gamma = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      'G' => {
-        let (r, g, b) = parse_triplet(unsafe { optarg }).unwrap_or_else(|| bad_value());
-        (config.gain_r, config.gain_g, config.gain_b) = (r, g, b);
-      }
-      'O' => {
-        let (r, g, b) = parse_triplet(unsafe { optarg }).unwrap_or_else(|| bad_value());
-        (config.offset_r, config.offset_g, config.offset_b) = (r, g, b);
-      }
-      'c' => config.contrast = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      'b' => config.brightness = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      'p' => config.posterize_levels = parse_u32(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      's' => config.solarize_value = parse_f64(unsafe { optarg }).unwrap_or_else(|| bad_value()),
-      'i' => config.invert = true,
-      'x' => config.disable_r = true,
-      'y' => config.disable_g = true,
-      'z' => config.disable_b = true,
-      'h' => {
-        write_stdout(USAGE);
-        return 1;
-      }
-      _ => (),
-    }
-  }
-
-  if !temp_set {
+  if argc <= 0 || argv.is_null() {
     write_stderr(USAGE);
     return 1;
+  }
+
+  let mut config = Config::default();
+
+  let args_iter = unsafe { get_args_iter(argc as usize, argv) };
+
+  if parse_args(args_iter, &mut config).is_none() {
+    bad_value()
   }
 
   let mut conn = match Connection::connect() {
