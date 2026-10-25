@@ -6,13 +6,16 @@ pub mod error;
 pub mod state;
 
 use core::ffi::{c_char, c_int};
-use core::mem;
+use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use rustix::fs::{Access, access};
 use shared::cli::Arg::Value;
 use shared::cli::{ArgParser, get_args_iter};
+use shared::exit::die;
+use shared::signal::{KernelSigaction, sigaction, signal};
 use wllib::dispatch::dispatch_once;
+use wllib::error::SysResultExt;
 use wllib::error::WireError::ConnectionClosed;
 use wllib::io::write_stderr;
 use wllib::protocols::ext_idle_notifier_v1;
@@ -26,20 +29,6 @@ use crate::state::State;
 const SIGCHLD: c_int = 17;
 const SIGUSR1: c_int = 10;
 const SIG_IGN: usize = 1;
-
-#[repr(C)]
-struct SigAction {
-  sa_sigaction: usize,
-  sa_mask: [u64; 16],
-  sa_flags: c_int,
-  sa_restorer: Option<unsafe extern "C" fn()>,
-}
-
-unsafe extern "C" {
-  fn signal(sig: c_int, handler: usize) -> usize;
-  fn sigaction(sig: c_int, act: *const SigAction, oact: *mut SigAction) -> c_int;
-  fn sigemptyset(set: *mut [u64; 16]) -> c_int;
-}
 
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
@@ -79,15 +68,14 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   }
 
   // tells kernel to reap child processes automatically, avoiding waitpid
-  unsafe { signal(SIGCHLD, SIG_IGN) };
+  let _ = unsafe { signal(SIGCHLD, SIG_IGN).syserr("sigaction") };
   // handle SIGUSR1
   unsafe {
-    let mut sa: SigAction = mem::zeroed();
-    sa.sa_sigaction = handle_sigusr1 as *const () as usize;
-    // sa_flags = 0 so that blocking syscalls (recv, etc.) fail with EINTR instead of restarting
-    sa.sa_flags = 0;
-    sigemptyset(&raw mut sa.sa_mask);
-    sigaction(SIGUSR1, &raw const sa, core::ptr::null_mut());
+    let act = KernelSigaction::new(handle_sigusr1 as *const () as usize, 0);
+    match sigaction(SIGUSR1, &act, ptr::null_mut()) {
+      Ok(()) => {}
+      Err(_) => die("[rustidle] failed to set action handler"),
+    }
   }
 
   let mut conn = match Connection::connect() {

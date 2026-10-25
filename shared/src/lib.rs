@@ -5,4 +5,4 @@
 pub mod cli;
 pub mod syscall;
 
-pub use syscall::{exit, signal};
+pub use syscall::{exit, fork, signal};

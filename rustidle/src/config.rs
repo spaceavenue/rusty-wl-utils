@@ -23,12 +23,12 @@ use core::{array, ptr};
 use rustix::fs::{Mode, OFlags, open};
 use rustix::io::read;
 use shared::exit;
-use wllib::error::{SysError, SysResultExt};
+use shared::syscall::{Fork, fork};
+use wllib::error::SysResultExt;
 
 use crate::error::AppError;
 
 unsafe extern "C" {
-  fn fork() -> c_int;
   fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
 }
 
@@ -78,20 +78,20 @@ impl Config {
   // the kernel reaps the child automatically.
   pub fn spawn(&self, offset: usize) -> Result<(), AppError> {
     unsafe {
-      let pid = fork();
-      if pid < 0 {
-        return Err(AppError::Sys(SysError::last("fork")));
-      }
-      if pid == 0 {
-        let argv = [
-          c"sh".as_ptr(),
-          c"-c".as_ptr(),
-          self.raw.as_ptr().add(offset).cast(),
-          ptr::null(),
-        ];
-        execvp(argv[0], argv.as_ptr());
-        // only reached if execvp fails
-        exit::exit(1);
+      let fork_res = fork().syserr("fork")?;
+      match fork_res {
+        Fork::Child => {
+          let argv = [
+            c"sh".as_ptr(),
+            c"-c".as_ptr(),
+            self.raw.as_ptr().add(offset).cast(),
+            ptr::null(),
+          ];
+          execvp(argv[0], argv.as_ptr());
+          // only reached if execvp fails
+          exit::exit(1);
+        }
+        Fork::Parent(_) => {}
       }
     }
     Ok(())

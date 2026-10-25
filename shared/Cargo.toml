@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 wllib = { workspace = true }
+rustix = { workspace = true }
 
 [lib]
 name = "shared"

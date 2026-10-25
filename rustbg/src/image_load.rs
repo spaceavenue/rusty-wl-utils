@@ -8,14 +8,14 @@ use rustix::process::{Pid, WaitOptions, waitpid};
 use rustix::stdio;
 use shared::exit;
 use shared::signal::{SIG_DFL, SIGPIPE, signal};
-use wllib::error::{SysError, SysResultExt};
+use shared::syscall::{Fork, fork};
+use wllib::error::SysResultExt;
 use wllib::fmt_lite::StringOnStack;
 
 use crate::error::AppError;
 use crate::state::Config;
 
 unsafe extern "C" {
-  fn fork() -> c_int;
   fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
 }
 
@@ -33,52 +33,50 @@ fn exec_and_read<const N: usize>(
   // O_CLOEXEC closes the read/write ends in any other spawned children
   let (read_fd, write_fd) = pipe_with(PipeFlags::CLOEXEC).syserr("pipe")?;
 
-  let pid = unsafe { fork() };
-  if pid < 0 {
-    return Err(AppError::Sys(SysError::last("fork")));
-  }
-  // child process context
-  // 1. redirect stdout to the write end of the pipe
-  // 2. restore default SIGPIPE handler before exec
-  if pid == 0 {
-    drop(read_fd);
+  let fork_res = fork().syserr("fork")?;
+  match fork_res {
+    Fork::Child => {
+      // 1. redirect stdout to the write end of the pipe
+      // 2. restore default SIGPIPE handler before exec
+      drop(read_fd);
 
-    let _ = stdio::dup2_stdout(&write_fd);
-    drop(write_fd);
+      let _ = stdio::dup2_stdout(&write_fd);
+      drop(write_fd);
 
-    unsafe { signal(SIGPIPE, SIG_DFL) };
+      unsafe { signal(SIGPIPE, SIG_DFL).syserr("sigaction")? };
 
-    // redirect stderr to /dev/null
-    if let Ok(devnull) = open(c"/dev/null", OFlags::WRONLY, Mode::empty()) {
-      let _ = stdio::dup2_stderr(&devnull);
-      drop(devnull);
+      // redirect stderr to /dev/null
+      if let Ok(devnull) = open(c"/dev/null", OFlags::WRONLY, Mode::empty()) {
+        let _ = stdio::dup2_stderr(&devnull);
+        drop(devnull);
+      }
+
+      unsafe { execvp(argv[0], argv.as_ptr()) };
+      // if execvp failed, kill child >:)
+      exit::exit(1);
     }
+    Fork::Parent(pid) => {
+      // 1. close the write end in parent
+      // 2. read raw bytes from the pipe directly into buffer
+      drop(write_fd);
 
-    unsafe { execvp(argv[0], argv.as_ptr()) };
-    // if execvp failed, kill child >:)
-    exit::exit(1);
-  }
+      let mut offset = 0usize;
+      while offset < buffer.len() {
+        let remaining = read(&read_fd, &mut buffer[offset..]).syserr("read")?;
+        if remaining == 0 {
+          break;
+        }
+        offset += remaining;
+      }
 
-  // parent process context
-  // 1. close the write end in parent
-  // 2. read raw bytes from the pipe directly into buffer
-  drop(write_fd);
+      drop(read_fd);
+      let pid = Pid::from_raw(pid as i32);
+      waitpid(pid, WaitOptions::empty()).syserr("waitpid")?;
 
-  let mut offset = 0usize;
-  while offset < buffer.len() {
-    let remaining = read(&read_fd, &mut buffer[offset..]).syserr("read")?;
-    if remaining == 0 {
-      break;
+      if offset != buffer.len() {
+        return Err(AppError::ImageDecodeError);
+      }
     }
-    offset += remaining;
-  }
-
-  drop(read_fd);
-  let pid = Pid::from_raw(pid);
-  waitpid(pid, WaitOptions::empty()).syserr("waitpid")?;
-
-  if offset != buffer.len() {
-    return Err(AppError::ImageDecodeError);
   }
   Ok(())
 }
