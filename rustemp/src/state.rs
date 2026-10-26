@@ -1,5 +1,6 @@
+use shared::error::{ConnectionExt, write_wire_diagnostic};
+use shared::io::write_stderr;
 use wllib::dispatch::EventHandler;
-use wllib::io::write_stderr;
 use wllib::protocols::zwlr_gamma_control_v1;
 use wllib::registry::{GlobalHandler, bind, clamp_version};
 use wllib::transport::Connection;
@@ -139,14 +140,14 @@ impl GlobalHandler for State {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(7, version), id) {
           Ok(()) => self.global.compositor_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustemp]", &e),
         }
       }
       "zwlr_gamma_control_manager_v1" => {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(1, version), id) {
           Ok(()) => self.global.gamma_manager_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustemp]", &e),
         }
       }
       "wl_output" => {
@@ -163,7 +164,7 @@ impl GlobalHandler for State {
             };
             self.output_len += 1;
           }
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustemp]", &e),
         }
       }
       _ => (),

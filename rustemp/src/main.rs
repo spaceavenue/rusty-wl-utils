@@ -8,13 +8,13 @@ mod state;
 use core::ffi::{c_char, c_int};
 
 use shared::cli::{Arg, ArgParser, get_args_iter};
+use shared::error::{ConnectionExt, write_wire_diagnostic};
+use shared::io::{write_stderr, write_stdout};
 use state::{Config, State};
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
-use wllib::io::{write_stderr, write_stdout};
 use wllib::protocols::zwlr_gamma_control_manager_v1;
 use wllib::registry::crawl;
-use wllib::transport::Connection;
 use wllib::wire::Message;
 
 #[link(name = "c", kind = "static")]
@@ -116,10 +116,10 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
     bad_value()
   }
 
-  let mut conn = match Connection::connect() {
+  let mut conn = match shared::connect_wayland() {
     Ok(c) => c,
     Err(e) => {
-      e.write_diagnostic();
+      write_wire_diagnostic("[rustemp]", &e);
       return 1;
     }
   };
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   let mut state = State::init(config);
 
   if let Err(e) = crawl(&mut conn, &mut state) {
-    e.write_diagnostic();
+    write_wire_diagnostic("[rustemp]", &e);
     return 1;
   }
 
@@ -156,7 +156,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
       Ok(()) => (),
       Err(ConnectionClosed) => break,
       Err(e) => {
-        e.write_diagnostic();
+        write_wire_diagnostic("[rustemp]", &e);
         break;
       }
     }

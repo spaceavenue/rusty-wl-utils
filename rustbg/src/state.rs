@@ -1,6 +1,7 @@
+use shared::error::{ConnectionExt, write_wire_diagnostic};
+use shared::io::write_stderr;
 use wllib::dispatch::EventHandler;
 use wllib::fmt_lite::StringOnStack;
-use wllib::io::write_stderr;
 use wllib::protocols::{wl_shm, wl_shm_pool, wl_surface, zwlr_layer_surface_v1};
 use wllib::registry::{GlobalHandler, bind, clamp_version};
 use wllib::transport::Connection;
@@ -162,21 +163,21 @@ impl GlobalHandler for State {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(7, version), id) {
           Ok(()) => self.global.compositor_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustbg]", &e),
         }
       }
       "wl_shm" => {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(2, version), id) {
           Ok(()) => self.global.shm_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustbg]", &e),
         }
       }
       "zwlr_layer_shell_v1" => {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(5, version), id) {
           Ok(()) => self.global.layer_shell_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustbg]", &e),
         }
       }
       "wl_output" => {
@@ -194,7 +195,7 @@ impl GlobalHandler for State {
             };
             self.output_len += 1;
           }
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustbg]", &e),
         }
       }
       _ => (),

@@ -1,3 +1,4 @@
+use shared::error::write_wire_diagnostic;
 use wllib::error::WireError;
 
 pub enum AppError {
@@ -7,7 +8,7 @@ pub enum AppError {
 impl AppError {
   pub fn write_diagnostic(&self) {
     match self {
-      AppError::Wire(e) => e.write_diagnostic(),
+      AppError::Wire(e) => write_wire_diagnostic("[rustemp]", e),
     }
   }
 }

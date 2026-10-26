@@ -1,4 +1,4 @@
-use core::ffi::{c_char, c_int};
+use core::ffi::c_char;
 use core::ptr;
 
 use rustix::fs::{Mode, OFlags, open};
@@ -8,16 +8,12 @@ use rustix::process::{Pid, WaitOptions, waitpid};
 use rustix::stdio;
 use shared::exit;
 use shared::signal::{SIG_DFL, SIGPIPE, signal};
-use shared::syscall::{Fork, fork};
+use shared::syscall::{Fork, execvp, fork};
 use wllib::error::SysResultExt;
 use wllib::fmt_lite::StringOnStack;
 
 use crate::error::AppError;
 use crate::state::Config;
-
-unsafe extern "C" {
-  fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
-}
 
 // this was a bit hard to follow so im documenting for my own reference
 // we:

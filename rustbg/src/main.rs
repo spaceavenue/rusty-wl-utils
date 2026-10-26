@@ -10,12 +10,12 @@ use core::ffi::{c_char, c_int};
 
 use rustix::fs::{Access, access};
 use shared::cli::{Arg, ArgParser, get_args_iter};
+use shared::error::{ConnectionExt, write_wire_diagnostic};
+use shared::io::write_stderr;
 use wllib::dispatch::dispatch_once;
 use wllib::error::WireError::ConnectionClosed;
-use wllib::io::write_stderr;
 use wllib::protocols::{wl_compositor, wl_surface, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use wllib::registry::crawl;
-use wllib::transport::Connection;
 use wllib::wire::Message;
 
 use crate::state::{Config, State};
@@ -67,10 +67,10 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
     return write_usage();
   }
 
-  let mut conn = match Connection::connect() {
+  let mut conn = match shared::connect_wayland() {
     Ok(c) => c,
     Err(e) => {
-      e.write_diagnostic();
+      write_wire_diagnostic("[rustbg]", &e);
       return 1;
     }
   };
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   let mut state = State::init(config);
 
   if let Err(e) = crawl(&mut conn, &mut state) {
-    e.write_diagnostic();
+    write_wire_diagnostic("[rustbg]", &e);
     return 1;
   }
 
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
       Ok(()) => (),
       Err(ConnectionClosed) => break,
       Err(e) => {
-        e.write_diagnostic();
+        write_wire_diagnostic("[rustbg]", &e);
         break;
       }
     }

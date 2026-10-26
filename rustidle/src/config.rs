@@ -17,20 +17,15 @@
 //
 // command tokens are stored as *offsets* into the raw file buffer, not raw pointers.
 
-use core::ffi::{c_char, c_int};
 use core::{array, ptr};
 
 use rustix::fs::{Mode, OFlags, open};
 use rustix::io::read;
 use shared::exit;
-use shared::syscall::{Fork, fork};
+use shared::syscall::{Fork, execvp, fork};
 use wllib::error::SysResultExt;
 
 use crate::error::AppError;
-
-unsafe extern "C" {
-  fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
-}
 
 pub const MAX_ENTRIES: usize = 16;
 pub const CONFIG_BUF_SIZE: usize = 4096;

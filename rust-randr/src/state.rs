@@ -1,6 +1,7 @@
+use shared::error::{ConnectionExt, write_wire_diagnostic};
+use shared::io::{write_stderr, write_stdout};
 use wllib::dispatch::EventHandler;
 use wllib::fmt_lite::StringOnStack;
-use wllib::io::{write_stderr, write_stdout};
 use wllib::protocols::{wl_output, zxdg_output_manager_v1, zxdg_output_v1};
 use wllib::registry::{GlobalHandler, bind, clamp_version};
 use wllib::transport::Connection;
@@ -266,7 +267,7 @@ impl GlobalHandler for State {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(7, version), id) {
           Ok(()) => self.global.compositor_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("rust-randr", &e),
         }
       }
       "wl_output" => {
@@ -283,7 +284,7 @@ impl GlobalHandler for State {
             };
             self.output_len += 1;
           }
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("rust-randr", &e),
         }
       }
       "zxdg_output_manager_v1" => {
@@ -291,7 +292,7 @@ impl GlobalHandler for State {
         // only `logical_position`/`logical_size` are wanted.
         match bind(conn, name, interface, clamp_version(1, version), id) {
           Ok(()) => self.global.xdg_output_manager_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("rust-randr", &e),
         }
       }
       _ => (),

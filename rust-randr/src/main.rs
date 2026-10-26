@@ -5,26 +5,26 @@ mod state;
 
 use core::ffi::{c_char, c_int};
 
+use shared::error::write_wire_diagnostic;
 use state::State;
 use wllib::dispatch::dispatch_once;
 use wllib::registry::crawl;
-use wllib::transport::Connection;
 
 #[link(name = "c", kind = "static")]
 unsafe extern "C" {}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main(_argc: isize, _argv: *const *mut c_char) -> c_int {
-  let mut conn = match Connection::connect() {
+  let mut conn = match shared::connect_wayland() {
     Ok(c) => c,
     Err(e) => {
-      e.write_diagnostic();
+      write_wire_diagnostic("rust-randr", &e);
       return 1;
     }
   };
   let mut state = State::init();
   if let Err(e) = crawl(&mut conn, &mut state) {
-    e.write_diagnostic();
+    write_wire_diagnostic("rust-randr", &e);
     return 1;
   }
   state.request_xdg_outputs(&mut conn);
@@ -34,7 +34,7 @@ pub unsafe extern "C" fn main(_argc: isize, _argv: *const *mut c_char) -> c_int 
   // happened to batch its writes, so we loop through them.
   while state.done_count < state.output_len {
     if let Err(e) = dispatch_once(&mut conn, &mut state) {
-      e.write_diagnostic();
+      write_wire_diagnostic("rust-randr", &e);
       return 1;
     }
   }

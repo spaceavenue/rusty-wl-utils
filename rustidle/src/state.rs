@@ -1,3 +1,4 @@
+use shared::error::write_wire_diagnostic;
 use wllib::dispatch::EventHandler;
 use wllib::protocols::ext_idle_notification_v1;
 use wllib::registry::{GlobalHandler, bind, clamp_version};
@@ -50,14 +51,14 @@ impl GlobalHandler for State {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(1, version), id) {
           Ok(()) => self.global.seat_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustidle]", &e),
         }
       }
       "ext_idle_notifier_v1" => {
         let id = conn.alloc_id();
         match bind(conn, name, interface, clamp_version(2, version), id) {
           Ok(()) => self.global.idle_notifier_id = id,
-          Err(e) => e.write_diagnostic(),
+          Err(e) => write_wire_diagnostic("[rustidle]", &e),
         }
       }
       _ => (),

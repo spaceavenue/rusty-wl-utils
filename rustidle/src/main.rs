@@ -12,12 +12,13 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use rustix::fs::{Access, access};
 use shared::cli::Arg::Value;
 use shared::cli::{ArgParser, get_args_iter};
+use shared::error::{ConnectionExt, write_wire_diagnostic};
 use shared::exit::die;
+use shared::io::write_stderr;
 use shared::signal::{KernelSigaction, sigaction, signal};
 use wllib::dispatch::dispatch_once;
 use wllib::error::SysResultExt;
 use wllib::error::WireError::ConnectionClosed;
-use wllib::io::write_stderr;
 use wllib::protocols::ext_idle_notifier_v1;
 use wllib::registry::crawl;
 use wllib::transport::Connection;
@@ -78,10 +79,10 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
     }
   }
 
-  let mut conn = match Connection::connect() {
+  let mut conn = match shared::connect_wayland() {
     Ok(c) => c,
     Err(e) => {
-      e.write_diagnostic();
+      write_wire_diagnostic("[rustidle]", &e);
       return 1;
     }
   };
@@ -96,7 +97,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
   let mut state = State::init(config);
 
   if let Err(e) = crawl(&mut conn, &mut state) {
-    e.write_diagnostic();
+    write_wire_diagnostic("[rustidle]", &e);
     return 1;
   }
 
@@ -146,7 +147,7 @@ pub unsafe extern "C" fn main(argc: isize, argv: *const *mut c_char) -> c_int {
         if IS_SUSPENDED.load(Ordering::Relaxed) {
           continue;
         }
-        e.write_diagnostic();
+        write_wire_diagnostic("[rustidle]", &e);
         break;
       }
     }

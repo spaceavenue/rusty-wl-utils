@@ -40,6 +40,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 name = "rust-randr"
 version = "1.0.0"
 dependencies = [
+ "shared",
  "wllib",
 ]
 
@@ -110,7 +111,6 @@ dependencies = [
 [[package]]
 name = "wllib"
 version = "0.1.0"
-source = "git+https://github.com/spaceavenue/wllib.git#30e7a8a7ee39f88586e72a7ede7221427218c4b6"
 dependencies = [
  "rustix",
 ]
