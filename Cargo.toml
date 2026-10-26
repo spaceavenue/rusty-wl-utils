@@ -21,5 +21,5 @@ panic = "immediate-abort"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
-strip = true
+# strip = true
 panic = "immediate-abort"

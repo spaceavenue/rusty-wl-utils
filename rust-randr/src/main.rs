@@ -10,8 +10,6 @@ use state::State;
 use wllib::dispatch::dispatch_once;
 use wllib::registry::crawl;
 
-#[link(name = "c", kind = "static")]
-unsafe extern "C" {}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main(_argc: isize, _argv: *const *mut c_char) -> c_int {

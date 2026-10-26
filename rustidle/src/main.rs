@@ -31,8 +31,6 @@ const SIGCHLD: c_int = 17;
 const SIGUSR1: c_int = 10;
 const SIG_IGN: usize = 1;
 
-#[link(name = "c", kind = "static")]
-unsafe extern "C" {}
 
 // flag to track the suspended state
 static IS_SUSPENDED: AtomicBool = AtomicBool::new(false);

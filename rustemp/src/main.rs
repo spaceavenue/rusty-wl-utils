@@ -17,8 +17,6 @@ use wllib::protocols::zwlr_gamma_control_manager_v1;
 use wllib::registry::crawl;
 use wllib::wire::Message;
 
-#[link(name = "c", kind = "static")]
-unsafe extern "C" {}
 
 const USAGE: &str = concat!(
   "Usage: rustemp -t <kelvin>\n",

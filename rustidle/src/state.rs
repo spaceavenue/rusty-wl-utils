@@ -26,6 +26,7 @@ pub struct State {
   pub config: Config,
   pub notifications: [Notification; MAX_ENTRIES],
 }
+
 impl State {
   #[must_use]
   pub fn init(config: Config) -> Self {
@@ -39,6 +40,7 @@ impl State {
     }
   }
 }
+
 impl GlobalHandler for State {
   // bind globals matching interfaces we want. we bind to the minimum of the client's wanted
   // version and the server's advertised version
@@ -65,6 +67,7 @@ impl GlobalHandler for State {
     }
   }
 }
+
 impl EventHandler for State {
   fn handle_event(&mut self, _conn: &mut Connection, sender: u32, opcode: u16, _data: &[u8]) {
     for notif in &self.notifications {

@@ -20,8 +20,6 @@ use wllib::wire::Message;
 
 use crate::state::{Config, State};
 
-#[link(name = "c", kind = "static")]
-unsafe extern "C" {}
 
 fn write_usage() -> c_int {
   write_stderr("Usage: rustbg [-f | --fill] [-n | --namespace <name>] <image path>\n");
